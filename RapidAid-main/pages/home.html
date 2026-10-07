@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RapidAid - Home</title>
+    <link rel="stylesheet" href="../style.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <style>
+        .app-wrapper { min-height: 100vh; padding-top: 70px; }
+    </style>
+</head>
+<body>
+    <nav class="navbar">
+        <div class="container">
+            <a href="home.html" class="logo"><i class="fas fa-ambulance"></i> RapidAid</a>
+            <div class="nav-links">
+                <span id="welcomeMsg" style="margin-right: 10px; color: #333;"></span>
+                <a href="#" class="btn btn-primary" id="sosBtn"><i class="fas fa-bell"></i> SOS</a>
+                <a href="#" class="btn btn-secondary" id="logoutBtn">Logout</a>
+            </div>
+        </div>
+    </nav>
+    <div class="app-wrapper">
+        <div class="sos-section">
+            <h2><i class="fas fa-map-marker-alt"></i> Request Ambulance</h2>
+            <div class="map-container" style="height: 40vh; margin: 1rem 0;">
+                <div id="map" style="height: 100%; width: 100%;"></div>
+            </div>
+            <button class="sos-button" onclick="requestAmbulance()">
+                <i class="fas fa-ambulance"></i>
+                SOS
+            </button>
+            <div style="margin-top: 1rem;">
+                <a href="tracking.html" class="btn btn-primary" style="display: none;" id="trackBtn">Track Ambulance</a>
+            </div>
+        </div>
+    </div>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script>
+        // API Configuration
+        const API_BASE_URL = window.location.origin + '/api';
+        
+        let map, marker, userMarker;
+        let currentUserId = localStorage.getItem('userId') || 1;
+        
+        document.addEventListener('DOMContentLoaded', function() {
+            // Check if user is logged in
+            const savedUser = localStorage.getItem('rapidAid_user');
+            if (savedUser) {
+                const user = JSON.parse(savedUser);
+                if (user.name) {
+                    document.getElementById('welcomeMsg').textContent = 'Welcome, ' + user.name;
+                }
+            }
+            
+            if (!currentUserId) { 
+                window.location.href = 'patient-login.html'; 
+                return; 
+            }
+            initMap();
+            loadRequests();
+        });
+        
+        function initMap() {
+            // Default location
+            const defaultLat = 30.6800;
+            const defaultLng = 76.6050;
+            
+            map = L.map('map').setView([defaultLat, defaultLng], 13);
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { 
+                attribution: '© OpenStreetMap' 
+            }).addTo(map);
+            
+            // Try to get user's location
+            if (navigator.geolocation) {
+                navigator.geolocation.getCurrentPosition(
+                    function(position) {
+                        const { latitude, longitude } = position.coords;
+                        map.setView([latitude, longitude], 14);
+                        userMarker = L.marker([latitude, longitude], { draggable: true }).addTo(map).bindPopup('Your Location');
+                        userMarker.on('dragend', function() {
+                            const pos = userMarker.getLatLng();
+                            console.log('User location: ' + pos.lat + ', ' + pos.lng);
+                        });
+                    },
+                    function(error) {
+                        console.log('Using default location');
+                        userMarker = L.marker([defaultLat, defaultLng], { draggable: true }).addTo(map).bindPopup('Your Location (Demo)');
+                    },
+                    { enableHighAccuracy: true, timeout: 10000 }
+                );
+            } else {
+                userMarker = L.marker([defaultLat, defaultLng], { draggable: true }).addTo(map).bindPopup('Your Location (Demo)');
+            }
+            
+            // Add ambulance markers
+            fetchAvailableAmbulances();
+        }
+        
+        function fetchAvailableAmbulances() {
+            fetch(API_BASE_URL + '/ambulances')
+                .then(r => r.json())
+                .then(data => {
+                    if (data.ambulances) {
+                        data.ambulances.forEach(amb => {
+                            const icon = L.divIcon({
+                                className: 'ambulance-marker',
+                                html: '<i class="fas fa-ambulance" style="color: #e53935; font-size: 24px;"></i>',
+                                iconSize: [30, 30],
+                                iconAnchor: [15, 15]
+                            });
+                            L.marker([amb.latitude, amb.longitude], {icon: icon})
+                                .addTo(map)
+                                .bindPopup(`<b>${amb.driver_name}</b><br>Status: ${amb.status}<br>Vehicle: ${amb.vehicle_number}`);
+                        });
+                    }
+                })
+                .catch(err => console.error('Error fetching ambulances:', err));
+        }
+        
+        function requestAmbulance() {
+            const lat = userMarker ? userMarker.getLatLng().lat : 30.6800;
+            const lng = userMarker ? userMarker.getLatLng().lng : 76.6050;
+            
+            // Show loading
+            const btn = document.querySelector('.sos-button');
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Processing...';
+            btn.disabled = true;
+            
+            fetch(API_BASE_URL + '/requests', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ 
+                    user_id: parseInt(currentUserId), 
+                    latitude: lat, 
+                    longitude: lng 
+                })
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (data.request_id) {
+                    alert('Ambulance requested! Request ID: ' + data.request_id + 
+                          (data.ambulance ? '\nDriver: ' + data.ambulance.driver_name : ''));
+                    localStorage.setItem('lastRequestId', data.request_id);
+                    window.location.href = 'tracking.html?request_id=' + data.request_id;
+                } else {
+                    alert('No ambulances available. Your request is in queue.');
+                    btn.innerHTML = '<i class="fas fa-ambulance"></i>SOS';
+                    btn.disabled = false;
+                }
+            })
+            .catch(err => {
+                console.error('Error:', err);
+                alert('Error requesting ambulance. Please try again.');
+                btn.innerHTML = '<i class="fas fa-ambulance"></i>SOS';
+                btn.disabled = false;
+            });
+        }
+        
+        function loadRequests() {
+            fetch(API_BASE_URL + '/users/' + currentUserId + '/requests')
+            .then(r => {
+                if (!r.ok) return { requests: [] };
+                return r.json();
+            })
+            .then(data => {
+                if (data.requests && data.requests.length > 0) {
+                    const activeRequest = data.requests.find(r => r.status === 'pending' || r.status === 'accepted');
+                    if (activeRequest) {
+                        document.getElementById('trackBtn').style.display = 'inline-block';
+                        document.getElementById('trackBtn').href = 'tracking.html?request_id=' + activeRequest.id;
+                    }
+                }
+            })
+            .catch(err => console.error('Error loading requests:', err));
+        }
+        
+        document.getElementById('sosBtn').addEventListener('click', function(e) { 
+            e.preventDefault(); 
+            requestAmbulance(); 
+        });
+        
+        document.getElementById('logoutBtn').addEventListener('click', function(e) { 
+            e.preventDefault(); 
+            localStorage.clear(); 
+            window.location.href = 'patient-login.html'; 
+        });
+    </script>
+</body>
+</html>
+</create_file>

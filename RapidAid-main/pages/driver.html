@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RapidAid - Driver Dashboard</title>
+    <link rel="stylesheet" href="../style.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <style>
+        .driver-wrapper { min-height: 100vh; padding-top: 70px; }
+        .map-container { height: 40vh; }
+    </style>
+</head>
+<body>
+    <nav class="navbar">
+        <div class="container">
+            <a href="home.html" class="logo"><i class="fas fa-ambulance"></i> RapidAid</a>
+            <div class="nav-links">
+                <span id="welcomeMsg" style="margin-right: 10px; color: #333;"></span>
+                <a href="#" class="btn btn-secondary" id="logoutBtn">Logout</a>
+            </div>
+        </div>
+    </nav>
+    
+    <div class="driver-wrapper">
+        <div class="driver-header">
+            <h2><i class="fas fa-ambulance"></i> Driver Dashboard</h2>
+            <p id="driverStatus">Loading...</p>
+        </div>
+        
+        <div class="map-container">
+            <div id="map" style="height: 100%; width: 100%;"></div>
+        </div>
+        
+        <div id="requestList" style="padding: 1rem;">
+            <h3>Pending Requests</h3>
+            <div id="requestsContainer"></div>
+        </div>
+    </div>
+    
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script>
+        const API_BASE_URL = window.location.origin + '/api';
+        
+        let map, driverMarker, userMarkers = [];
+        let driverId = localStorage.getItem('driverId') || localStorage.getItem('ambulanceId');
+        let currentRequestId = null;
+        
+        document.addEventListener('DOMContentLoaded', function() {
+            if (!driverId) { 
+                window.location.href = 'driver-login.html'; 
+                return; 
+            }
+            
+            // Check if driver is already logged in and show name
+            const savedDriver = localStorage.getItem('rapidAid_driver');
+            if (savedDriver) {
+                const driver = JSON.parse(savedDriver);
+                if (driver.driver_name) {
+                    document.getElementById('welcomeMsg').textContent = 'Welcome, ' + driver.driver_name;
+                }
+            }
+            
+            document.getElementById('driverStatus').textContent = 'Driver ID: ' + driverId;
+            initMap();
+            loadPendingRequests();
+            setInterval(loadPendingRequests, 10000);
+        });
+        
+        function initMap() {
+            map = L.map('map').setView([30.6800, 76.6050], 13);
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { 
+                attribution: '© OpenStreetMap' 
+            }).addTo(map);
+            
+            // Get driver location
+            if (navigator.geolocation) {
+                navigator.geolocation.watchPosition(
+                    function(position) {
+                        const { latitude, longitude } = position.coords;
+                        if (!driverMarker) {
+                            driverMarker = L.marker([latitude, longitude], { 
+                                icon: L.divIcon({ 
+                                    className: 'amb-marker', 
+                                    html: '<i class="fas fa-ambulance" style="color: #43a047; font-size: 24px;"></i>', 
+                                    iconSize: [30, 30] 
+                                }) 
+                            }).addTo(map).bindPopup('Your Location');
+                        } else { 
+                            driverMarker.setLatLng([latitude, longitude]); 
+                        }
+                        map.setView([latitude, longitude], 14);
+                    }, 
+                    function(error) {
+                        console.log('Location error:', error);
+                    }, 
+                    { enableHighAccuracy: true }
+                );
+            }
+        }
+        
+        function loadPendingRequests() {
+            fetch(API_BASE_URL + '/requests/pending')
+            .then(r => r.json())
+            .then(data => {
+                const container = document.getElementById('requestsContainer');
+                container.innerHTML = '';
+                
+                if (data.requests && data.requests.length > 0) {
+                    data.requests.forEach(req => {
+                        const card = document.createElement('div');
+                        card.className = 'request-card';
+                        card.innerHTML = `
+                            <p><strong>Request #${req.id}</strong></p>
+                            <p>Location: ${req.user_lat.toFixed(4)}, ${req.user_lng.toFixed(4)}</p>
+                            <p>Status: <span class="status-badge status-pending">Pending</span></p>
+                            <div class="request-actions">
+                                <button class="btn btn-success" onclick="acceptRequest(${req.id})">
+                                    <i class="fas fa-check"></i> Accept
+                                </button>
+                            </div>
+                        `;
+                        container.appendChild(card);
+                        
+                        // Add marker for user location
+                        const userMarker = L.marker([req.user_lat, req.user_lng])
+                            .addTo(map)
+                            .bindPopup(`Request #${req.id} - Patient Location`);
+                    });
+                } else {
+                    container.innerHTML = '<p>No pending requests</p>';
+                }
+            })
+            .catch(err => console.error('Error loading requests:', err));
+        }
+        
+        function acceptRequest(requestId) {
+            if (!driverId) {
+                alert('Please login first');
+                return;
+            }
+            
+            fetch(API_BASE_URL + '/driver/accept', {
+                method: 'POST', 
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ 
+                    request_id: requestId, 
+                    ambulance_id: parseInt(driverId)
+                })
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (data.status === 'success') {
+                    alert('Request accepted! ETA: ' + data.eta_minutes + ' minutes');
+                    currentRequestId = requestId;
+                    loadPendingRequests();
+                } else {
+                    alert(data.message || 'Failed to accept request');
+                }
+            })
+            .catch(err => {
+                console.error('Error:', err);
+                alert('Error accepting request');
+            });
+        }
+        
+        document.getElementById('logoutBtn').addEventListener('click', function(e) { 
+            e.preventDefault(); 
+            localStorage.clear(); 
+            window.location.href = 'driver-login.html'; 
+        });
+    </script>
+</body>
+</html>
+

@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RapidAid - Track Ambulance</title>
+    <link rel="stylesheet" href="../style.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <style>
+        .tracking-wrapper { min-height: 100vh; padding-top: 70px; }
+        .map-container { height: 50vh; }
+    </style>
+</head>
+<body>
+    <nav class="navbar">
+        <div class="container">
+            <a href="home.html" class="logo"><i class="fas fa-ambulance"></i> RapidAid</a>
+            <div class="nav-links">
+                <a href="home.html" class="btn btn-secondary">Home</a>
+            </div>
+        </div>
+    </nav>
+    
+    <div class="tracking-wrapper">
+        <div class="tracking-header">
+            <h2><i class="fas fa-map-marker-alt"></i> Track Your Ambulance</h2>
+            <p id="statusText">Locating ambulance...</p>
+        </div>
+        
+        <div class="map-container">
+            <div id="map" style="height: 100%; width: 100%;"></div>
+        </div>
+        
+    <div class="tracking-info">
+            <div class="driver-info">
+                <div class="driver-avatar">
+                    <i class="fas fa-user"></i>
+                </div>
+                <div>
+                    <h3 id="driverName">Finding Driver...</h3>
+                    <p>Ambulance Driver</p>
+                    <p id="driverPhone" style="color: #e53935;"></p>
+                    <p id="vehicleNumber" style="color: #666; font-size: 0.9rem;"></p>
+                </div>
+            </div>
+            
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin: 1rem 0;">
+                <div class="eta-display" style="background: #f5f5f5; padding: 1rem; border-radius: 10px; text-align: center;">
+                    <p style="font-size: 0.9rem; color: #666;">ETA</p>
+                    <div class="eta-time" id="etaTime" style="font-size: 2rem; color: #e53935;">--</div>
+                    <p style="font-size: 0.8rem; color: #666;">minutes</p>
+                </div>
+                
+                <div style="background: #f5f5f5; padding: 1rem; border-radius: 10px; text-align: center;">
+                    <p style="font-size: 0.9rem; color: #666;">Distance</p>
+                    <div id="distanceDisplay" style="font-size: 2rem; color: #43a047;">--</div>
+                    <p style="font-size: 0.8rem; color: #666;">km away</p>
+                </div>
+            </div>
+            
+            <div class="tracking-actions">
+                <button class="btn btn-success" onclick="callDriver()">
+                    <i class="fas fa-phone"></i> Call Driver
+                </button>
+                <button class="btn btn-danger" onclick="cancelRequest()">
+                    <i class="fas fa-times"></i> Cancel
+                </button>
+            </div>
+        </div>
+    </div>
+    
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script>
+        const API_BASE_URL = window.location.origin + '/api';
+        
+        let map, userMarker, ambulanceMarker;
+        let requestId = new URLSearchParams(window.location.search).get('request_id');
+
+        document.addEventListener('DOMContentLoaded', function() {
+            initMap();
+
+            if (requestId) {
+                loadTracking();
+                setInterval(loadTracking, 5000);
+            } else {
+                alert('No request ID');
+                window.location.href = 'home.html';
+            }
+        });
+
+        function initMap() {
+            map = L.map('map').setView([30.6800, 76.6050], 13);
+
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '© OpenStreetMap'
+            }).addTo(map);
+        }
+
+        function loadTracking() {
+            fetch(API_BASE_URL + '/requests/' + requestId)
+            .then(r => {
+                if (!r.ok) {
+                    throw new Error('Request not found');
+                }
+                return r.json();
+            })
+            .then(data => {
+                if (data.status === 'error') {
+                    document.getElementById('statusText').textContent = 'Request not found. It may have expired or been cancelled.';
+                    return;
+                }
+                
+                if (data.request) {
+                    const req = data.request;
+                    
+                    // Update status text
+                    const statusText = document.getElementById('statusText');
+                    if (req.status === 'accepted') {
+                        statusText.textContent = 'Ambulance is on the way!';
+                    } else if (req.status === 'pending') {
+                        statusText.textContent = 'Waiting for ambulance assignment...';
+                    }
+
+                    // User location
+                    if (req.user_lat && req.user_lng) {
+                        if (!userMarker) {
+                            userMarker = L.marker([req.user_lat, req.user_lng])
+                                .addTo(map)
+                                .bindPopup('Your Location');
+                        } else {
+                            userMarker.setLatLng([req.user_lat, req.user_lng]);
+                        }
+                    }
+
+                    // Ambulance info
+                    if (data.ambulance) {
+                        document.getElementById('driverName').textContent = data.ambulance.driver_name || 'Assigned Driver';
+                        document.getElementById('driverPhone').textContent = data.ambulance.phone || '';
+                        document.getElementById('vehicleNumber').textContent = 'Vehicle: ' + (data.ambulance.vehicle_number || 'N/A');
+
+                        if (data.ambulance.latitude && data.ambulance.longitude) {
+                            if (!ambulanceMarker) {
+                                ambulanceMarker = L.marker(
+                                    [data.ambulance.latitude, data.ambulance.longitude],
+                                    {
+                                        icon: L.divIcon({
+                                            className: 'amb-marker',
+                                            html: '<i class="fas fa-ambulance" style="color:#43a047;font-size:24px;"></i>',
+                                            iconSize: [30,30]
+                                        })
+                                    }
+                                ).addTo(map).bindPopup('Ambulance');
+                            } else {
+                                ambulanceMarker.setLatLng([
+                                    data.ambulance.latitude,
+                                    data.ambulance.longitude
+                                ]);
+                            }
+                        }
+                    }
+
+                    // ETA
+                    if (req.eta_minutes) {
+                        document.getElementById('etaTime').textContent = req.eta_minutes;
+                    }
+
+                    // Distance
+                    if (data.distance_km) {
+                        document.getElementById('distanceDisplay').textContent =
+                            data.distance_km.toFixed(2) + ' km';
+                    }
+
+                    // Map bounds
+                    if (userMarker && ambulanceMarker) {
+                        map.fitBounds(
+                            L.latLngBounds([
+                                userMarker.getLatLng(),
+                                ambulanceMarker.getLatLng()
+                            ])
+                        );
+                    } else if (userMarker) {
+                        map.setView(userMarker.getLatLng(), 14);
+                    }
+
+                    // Completed
+                    if (req.status === 'completed') {
+                        alert('Request completed!');
+                        window.location.href = 'home.html';
+                    }
+                }
+            })
+            .catch(err => console.error('Error loading tracking:', err));
+        }
+
+        function callDriver() {
+            fetch(API_BASE_URL + '/requests/' + requestId)
+            .then(r => r.json())
+            .then(data => {
+                if (data.ambulance && data.ambulance.phone) {
+                    window.location.href = 'tel:' + data.ambulance.phone;
+                } else {
+                    alert('Driver phone not available');
+                }
+            });
+        }
+
+        function cancelRequest() {
+            if (confirm('Cancel this request?')) {
+                fetch(
+                    API_BASE_URL + '/requests/' + requestId + '/status',
+                    {
+                        method: 'PUT',
+                        headers: {'Content-Type':'application/json'},
+                        body: JSON.stringify({status:'cancelled'})
+                    }
+                )
+                .then(() => {
+                    alert('Request cancelled');
+                    window.location.href = 'home.html';
+                })
+                .catch(err => {
+                    console.error('Error:', err);
+                    alert('Error cancelling request');
+                });
+            }
+        }
+    </script>
+</body>
+</html>
+
